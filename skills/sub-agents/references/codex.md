@@ -23,7 +23,7 @@ Sub-agent CLIs require access to session files outside the sandbox.
 
 **Setting:** `"sandbox_permissions": "require_escalated"` in Bash tool parameters.
 
-Do not attempt a sandboxed run first—it will fail with:
+Always request escalated permissions on the first run. Sandboxed runs fail with:
 ```
 Error: Fatal error: Codex cannot access session files at ~/.codex/sessions (permission denied)
 ```

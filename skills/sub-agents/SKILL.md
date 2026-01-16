@@ -11,7 +11,6 @@ Spawns external CLI AIs (claude, cursor-agent, codex, gemini) as isolated sub-ag
 ## Resources
 
 - **[run_subagent.py](scripts/run_subagent.py)** - Main execution script
-- **[cli-formats.md](references/cli-formats.md)** - CLI output format details
 - **[codex.md](references/codex.md)** - Codex-specific setup (permissions, timeout)
 
 **Script Path**: Use absolute path `{SKILL_DIR}/scripts/run_subagent.py` where `{SKILL_DIR}` is the directory containing this SKILL.md file.
@@ -48,10 +47,6 @@ Extract parameters from user's natural language request:
 - Parallel investigation (multiple agents can run simultaneously)
 - Task needs fresh context (sub-agent starts without conversation history)
 - Specialized agent definition exists (leverage pre-defined expert prompts)
-
-**Do NOT use when:**
-- Simple single-step task → direct execution is faster
-- Task requires current conversation context → sub-agent cannot access parent context
 
 ## Important: Permission and Timeout
 
