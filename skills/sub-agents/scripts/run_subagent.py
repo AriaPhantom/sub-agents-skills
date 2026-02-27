@@ -303,7 +303,8 @@ def build_command(cli: str, prompt: str) -> tuple[str, list]:
     """Build command and arguments for the specified CLI."""
 
     if cli == "codex":
-        return "codex", ["exec", "--json", prompt]
+        # Allow execution in non-git working directories used by sub-agent tasks.
+        return "codex", ["exec", "--json", "--skip-git-repo-check", prompt]
 
     if cli == "claude":
         return "claude", ["--output-format", "stream-json", "--verbose", "-p", prompt]
@@ -341,6 +342,10 @@ def execute_agent(
     timeout_sec = timeout / 1000
 
     try:
+        # Windows compatibility: some wrappers may need shell=True, but codex hangs with it.
+        is_windows = os.name == "nt"
+        use_shell = is_windows and cli != "codex"
+
         process = subprocess.Popen(
             [command] + args,
             cwd=cwd,
@@ -348,34 +353,34 @@ def execute_agent(
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            shell=use_shell,
         )
 
         processor = StreamProcessor()
-        stdout_lines = []
 
         try:
-            # Read stdout line by line
-            for line in iter(process.stdout.readline, ""):
-                stdout_lines.append(line)
-                if processor.process_line(line):
-                    process.terminate()
-                    break
-
-            # Wait for process to finish
+            # Use communicate() with timeout to avoid blocking on readline() on Windows.
             try:
-                _, stderr = process.communicate(timeout=timeout_sec)
-            except subprocess.TimeoutExpired:
+                stdout, stderr = process.communicate(timeout=timeout_sec)
+            except subprocess.TimeoutExpired as e:
                 process.kill()
-                _, stderr = process.communicate()
+                stdout, stderr = process.communicate()
+
+                timed_out_stdout = (e.output or "") + (stdout or "")
+                for line in timed_out_stdout.splitlines():
+                    processor.process_line(line)
 
                 result = processor.get_result()
                 return {
-                    "result": result.get("result", "") if result else "",
+                    "result": result.get("result", "") if result else timed_out_stdout,
                     "exit_code": 124,
-                    "status": "partial" if result else "error",
+                    "status": "partial" if result or timed_out_stdout else "error",
                     "cli": cli,
                     "error": f"Timeout after {timeout}ms",
                 }
+
+            for line in stdout.splitlines():
+                processor.process_line(line)
 
             result = processor.get_result()
             exit_code = process.returncode or 0
@@ -389,7 +394,7 @@ def execute_agent(
                 status = "error"
 
             response = {
-                "result": result.get("result", "") if result else "".join(stdout_lines),
+                "result": result.get("result", "") if result else stdout,
                 "exit_code": exit_code,
                 "status": status,
                 "cli": cli,
