@@ -50,5 +50,12 @@ Conclusion: model aliases (`flash`/`pro`) are the most robust default for this e
 5. Command builder assertions for `--approval-mode` and repeated `--include-directories`.
 
 ## Verification Summary For This Round
-1. Targeted tests: `52 passed` (`tests/test_run_subagent.py`).
+1. Targeted tests: `60 passed` (`tests/test_run_subagent.py`) after follow-up model-routing tests.
 2. Lint: `ruff check` passed for changed files.
+
+## Follow-up Policy Update (User Preference)
+1. Gemini routing policy changed to: default `pro`, small tasks only `flash`.
+2. Added small-task heuristic + configurability:
+   - Env override: `SUB_AGENT_SMALL_TASK_MAX_CHARS` (default `220`).
+   - Explicit `model` in agent frontmatter still has highest priority.
+   - `SUB_AGENT_GEMINI_MODEL` still force-overrides heuristic when set.

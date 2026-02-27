@@ -21,6 +21,7 @@ from run_subagent import (  # noqa: E402
     extract_description,
     get_agents_dirs,
     is_path_within,
+    is_small_task_prompt,
     list_agents,
     load_agent,
     normalize_approval_mode,
@@ -30,6 +31,7 @@ from run_subagent import (  # noqa: E402
     resolve_cli,
     resolve_cli_command,
     resolve_include_directories,
+    resolve_small_task_max_chars,
 )
 
 
@@ -118,6 +120,27 @@ class TestApprovalModeNormalization:
     def test_invalid_type_raises(self):
         with pytest.raises(ValueError, match="approval_mode"):
             normalize_approval_mode(True)  # type: ignore[arg-type]
+
+
+class TestSmallTaskHeuristic:
+    def test_small_prompt_is_true(self):
+        assert is_small_task_prompt("Fix typo in README.") is True
+
+    def test_large_prompt_is_false(self):
+        assert is_small_task_prompt("x" * 400) is False
+
+    def test_invalid_type_is_false(self):
+        assert is_small_task_prompt(None) is False
+
+    def test_env_threshold_override(self):
+        with patch.dict("os.environ", {"SUB_AGENT_SMALL_TASK_MAX_CHARS": "10"}):
+            assert resolve_small_task_max_chars() == 10
+            assert is_small_task_prompt("short") is True
+            assert is_small_task_prompt("this is definitely longer than ten chars") is False
+
+    def test_invalid_env_threshold_uses_default(self):
+        with patch.dict("os.environ", {"SUB_AGENT_SMALL_TASK_MAX_CHARS": "bad"}):
+            assert resolve_small_task_max_chars() == 220
 
 
 class TestReadAgentText:
@@ -420,6 +443,18 @@ class TestBuildCommand:
             "-p",
             "Use stdin as the full task context.",
         ]
+        assert args[-2:] == ["-m", "flash"]
+
+    def test_gemini_command_defaults_to_pro_for_large_prompt(self):
+        _, args = build_command("gemini", "x" * 600, agent_meta={})
+        assert args[-2:] == ["-m", "pro"]
+
+    def test_gemini_command_uses_user_prompt_hint_for_auto_model(self):
+        _, args = build_command(
+            "gemini",
+            "[System Context]\nVery long context\n\n[User Prompt]\nLong prompt body",
+            agent_meta={"_user_prompt": "fix typo"},
+        )
         assert args[-2:] == ["-m", "flash"]
 
     def test_gemini_command_prefers_agent_meta_model(self):

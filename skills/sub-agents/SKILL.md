@@ -174,6 +174,7 @@ Agent instructions here.
 Notes:
 - `kind: remote` is currently not supported by this wrapper (use native Gemini CLI for remote subagents).
 - `name` must be lowercase and use letters/numbers/hyphen/underscore.
+- If `model` is omitted and `SUB_AGENT_GEMINI_MODEL` is not set, wrapper policy is: default `pro`, only short prompts auto-route to `flash` (threshold from `SUB_AGENT_SMALL_TASK_MAX_CHARS`, default `220`).
 - `approval_mode` supports `default`, `auto_edit`, `yolo`, `plan` (`autoEdit` is normalized to `auto_edit`).
   - Some Gemini CLI installs require enabling `experimental.plan` before `approval_mode: plan` works.
 - `include_directories` accepts up to 5 paths (relative paths resolve from `--cwd`).

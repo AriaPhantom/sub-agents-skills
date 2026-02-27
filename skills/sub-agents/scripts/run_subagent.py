@@ -103,6 +103,7 @@ _AGENT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 _GEMINI_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _GEMINI_APPROVAL_MODES = {"default", "auto_edit", "yolo", "plan"}
 _GEMINI_NATIVE_ONLY_FIELDS = ("tools", "temperature", "max_turns")
+_SMALL_TASK_MAX_CHARS_DEFAULT = 220
 
 
 def validate_agent_name(agent_name: str) -> str:
@@ -190,6 +191,35 @@ def normalize_include_directories(value) -> list[str]:
         normalized.append(item)
 
     return normalized
+
+
+def resolve_small_task_max_chars() -> int:
+    """Resolve the small-task threshold from env with a safe default."""
+    raw_value = os.environ.get("SUB_AGENT_SMALL_TASK_MAX_CHARS")
+    if raw_value:
+        try:
+            parsed = int(raw_value)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    return _SMALL_TASK_MAX_CHARS_DEFAULT
+
+
+def is_small_task_prompt(prompt: str | None) -> bool:
+    """
+    Heuristic for Gemini model routing.
+    Small tasks use flash; everything else defaults to pro.
+    """
+    if not isinstance(prompt, str):
+        return False
+
+    stripped = prompt.strip()
+    if not stripped:
+        return True
+
+    max_chars = resolve_small_task_max_chars()
+    return len(stripped) <= max_chars
 
 
 def normalize_gemini_config(frontmatter: dict, fallback_name: str) -> dict:
@@ -593,6 +623,7 @@ class StreamProcessor:
 
 def build_command(cli: str, prompt: str, agent_meta: dict | None = None) -> tuple[str, list]:
     """Build command and arguments for the specified CLI."""
+    meta = agent_meta or {}
 
     if cli == "codex":
         command = resolve_cli_command("codex")
@@ -612,21 +643,22 @@ def build_command(cli: str, prompt: str, agent_meta: dict | None = None) -> tupl
         command = resolve_cli_command("gemini")
         # Keep gemini in headless mode; full multi-line prompt is sent via stdin.
         args = ["--output-format", "stream-json", "-p", "Use stdin as the full task context."]
-        model = (
-            (agent_meta or {}).get("model")
-            or os.environ.get("SUB_AGENT_GEMINI_MODEL")
-            or "flash"
-        )
+
+        model = meta.get("model") or os.environ.get("SUB_AGENT_GEMINI_MODEL")
+        if not model:
+            user_prompt = meta.get("_user_prompt")
+            model = "flash" if is_small_task_prompt(user_prompt or prompt) else "pro"
+
         if isinstance(model, str) and model.strip():
             args.extend(["-m", model.strip()])
 
         approval_mode = normalize_approval_mode(
-            (agent_meta or {}).get("approval_mode") or os.environ.get("SUB_AGENT_GEMINI_APPROVAL_MODE")
+            meta.get("approval_mode") or os.environ.get("SUB_AGENT_GEMINI_APPROVAL_MODE")
         )
         if approval_mode:
             args.extend(["--approval-mode", approval_mode])
 
-        include_directories = (agent_meta or {}).get("include_directories") or []
+        include_directories = meta.get("include_directories") or []
         for include_dir in include_directories:
             args.extend(["--include-directories", include_dir])
         return command, args
@@ -663,7 +695,11 @@ def execute_agent(
     # Format prompt with system context
     formatted_prompt = f"[System Context]\n{system_context}\n\n[User Prompt]\n{prompt}"
 
-    command, args = build_command(cli, formatted_prompt, agent_meta=agent_meta)
+    runtime_meta = dict(agent_meta or {})
+    if cli == "gemini":
+        runtime_meta.setdefault("_user_prompt", prompt)
+
+    command, args = build_command(cli, formatted_prompt, agent_meta=runtime_meta)
     timeout_sec = timeout / 1000
 
     try:
