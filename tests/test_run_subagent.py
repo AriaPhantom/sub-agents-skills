@@ -20,12 +20,14 @@ from run_subagent import (  # noqa: E402
     execute_agent,
     extract_description,
     get_agents_dirs,
+    is_path_within,
     list_agents,
     load_agent,
     normalize_gemini_config,
     parse_frontmatter,
     read_agent_text,
     resolve_cli,
+    resolve_cli_command,
 )
 
 
@@ -116,6 +118,41 @@ class TestGetAgentsDirs:
         assert dirs[2] == str(Path(home) / ".gemini" / "agents")
 
 
+class TestResolveCliCommand:
+    def test_non_windows_keeps_command(self):
+        with patch("run_subagent.os.name", "posix"):
+            assert resolve_cli_command("codex") == "codex"
+
+    def test_windows_prefers_resolved_wrapper(self):
+        def _which(candidate: str):
+            if candidate == "codex.cmd":
+                return r"C:\tools\codex.cmd"
+            return None
+
+        with patch("run_subagent.os.name", "nt"):
+            with patch("run_subagent.shutil.which", side_effect=_which):
+                assert resolve_cli_command("codex") == r"C:\tools\codex.cmd"
+
+    def test_windows_fallbacks_to_plain_command(self):
+        with patch("run_subagent.os.name", "nt"):
+            with patch("run_subagent.shutil.which", return_value=None):
+                assert resolve_cli_command("gemini") == "gemini"
+
+
+class TestPathSafety:
+    def test_is_path_within(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base = root / ".agents"
+            inside = base / "worker.md"
+            outside = root / "outside.md"
+            _write(inside, "inside")
+            _write(outside, "outside")
+
+            assert is_path_within(base, inside) is True
+            assert is_path_within(base, outside) is False
+
+
 class TestLoadAgent:
     def test_loads_legacy_agent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -169,6 +206,23 @@ You are frontend specialist.
         with tempfile.TemporaryDirectory() as tmpdir, pytest.raises(FileNotFoundError):
             load_agent([tmpdir], "missing-agent")
 
+    def test_skips_paths_outside_agent_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            legacy_dir = Path(tmpdir) / ".agents"
+            _write(
+                legacy_dir / "backend.md",
+                """---
+run-agent: codex
+---
+
+# Backend Agent
+Handles backend tasks.
+""",
+            )
+            with patch("run_subagent.is_path_within", return_value=False):
+                with pytest.raises(FileNotFoundError):
+                    load_agent([str(legacy_dir)], "backend")
+
 
 class TestListAgents:
     def test_lists_agents_across_dirs(self):
@@ -202,6 +256,14 @@ Instructions.
             agents = list_agents([str(agent_dir)])
             assert len(agents) == 1
             assert "invalid agent" in agents[0]["description"]
+
+    def test_skips_paths_outside_agent_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            agent_dir = Path(tmpdir) / ".agents"
+            _write(agent_dir / "safe.md", "---\nrun-agent: codex\n---\n\nsafe\n")
+            with patch("run_subagent.is_path_within", return_value=False):
+                agents = list_agents([str(agent_dir)])
+            assert agents == []
 
 
 class TestResolveCli:
@@ -248,12 +310,12 @@ class TestStreamProcessor:
 class TestBuildCommand:
     def test_codex_command(self):
         cmd, args = build_command("codex", "prompt")
-        assert cmd in {"codex", "codex.cmd"}
+        assert Path(cmd).name.lower() in {"codex", "codex.cmd", "codex.exe", "codex.bat"}
         assert args == ["exec", "--json", "--skip-git-repo-check", "-"]
 
     def test_gemini_command_defaults_to_flash(self):
         cmd, args = build_command("gemini", "prompt", agent_meta={})
-        assert cmd in {"gemini", "gemini.cmd"}
+        assert Path(cmd).name.lower() in {"gemini", "gemini.cmd", "gemini.exe", "gemini.bat"}
         assert args[:4] == [
             "--output-format",
             "stream-json",
@@ -264,7 +326,7 @@ class TestBuildCommand:
 
     def test_gemini_command_prefers_agent_meta_model(self):
         cmd, args = build_command("gemini", "prompt", agent_meta={"model": "pro"})
-        assert cmd in {"gemini", "gemini.cmd"}
+        assert Path(cmd).name.lower() in {"gemini", "gemini.cmd", "gemini.exe", "gemini.bat"}
         assert args[-2:] == ["-m", "pro"]
 
     def test_gemini_command_uses_env_override(self):
@@ -318,7 +380,7 @@ class TestExecuteAgent:
         process.returncode = 0
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("subprocess.Popen", return_value=process):
+            with patch("subprocess.Popen", return_value=process) as mock_popen:
                 result = execute_agent(
                     cli="gemini",
                     system_context="System instructions",
@@ -336,6 +398,9 @@ class TestExecuteAgent:
         assert "[System Context]" in communicate_kwargs["input"]
         assert "[User Prompt]" in communicate_kwargs["input"]
         assert communicate_kwargs["timeout"] == 5.0
+        popen_kwargs = mock_popen.call_args.kwargs
+        assert popen_kwargs["shell"] is False
+        assert popen_kwargs["stdin"] == subprocess.PIPE
 
     def test_codex_uses_stdin_for_prompt(self):
         process = MagicMock()
@@ -352,7 +417,7 @@ class TestExecuteAgent:
         process.returncode = 0
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("subprocess.Popen", return_value=process):
+            with patch("subprocess.Popen", return_value=process) as mock_popen:
                 result = execute_agent(
                     cli="codex",
                     system_context="System instructions",
@@ -367,6 +432,9 @@ class TestExecuteAgent:
         communicate_kwargs = process.communicate.call_args.kwargs
         assert "[System Context]" in communicate_kwargs["input"]
         assert "[User Prompt]" in communicate_kwargs["input"]
+        popen_kwargs = mock_popen.call_args.kwargs
+        assert popen_kwargs["shell"] is False
+        assert popen_kwargs["stdin"] == subprocess.PIPE
 
     def test_claude_does_not_send_stdin(self):
         process = MagicMock()
@@ -374,7 +442,7 @@ class TestExecuteAgent:
         process.returncode = 0
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("subprocess.Popen", return_value=process):
+            with patch("subprocess.Popen", return_value=process) as mock_popen:
                 result = execute_agent(
                     cli="claude",
                     system_context="System instructions",
@@ -388,6 +456,9 @@ class TestExecuteAgent:
 
         communicate_kwargs = process.communicate.call_args.kwargs
         assert communicate_kwargs.get("input") is None
+        popen_kwargs = mock_popen.call_args.kwargs
+        assert popen_kwargs["shell"] is False
+        assert popen_kwargs["stdin"] is None
 
     def test_timeout_returns_partial_when_output_exists(self):
         process = MagicMock()

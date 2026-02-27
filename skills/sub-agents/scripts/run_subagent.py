@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -110,6 +111,31 @@ def validate_agent_name(agent_name: str) -> str:
     if not agent_name or not _AGENT_NAME_PATTERN.match(agent_name):
         raise ValueError(f"Invalid agent name: {agent_name!r}")
     return agent_name
+
+
+def resolve_cli_command(command: str) -> str:
+    """
+    Resolve a CLI executable in PATH.
+    On Windows, prefer .cmd/.exe wrappers and avoid shell=True execution.
+    """
+    if os.name != "nt":
+        return command
+
+    candidates = [f"{command}.cmd", f"{command}.exe", command, f"{command}.bat"]
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return command
+
+
+def is_path_within(base_dir: Path, target_path: Path) -> bool:
+    """Return True if target_path resolves under base_dir."""
+    try:
+        target_path.resolve().relative_to(base_dir.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def is_gemini_agents_path(agent_file: Path) -> bool:
@@ -228,12 +254,10 @@ def load_agent(agents_dirs: list[str], agent_name: str) -> tuple[str | None, str
     validate_agent_name(agent_name)
 
     for agents_path, agent_file in _iter_agent_files(agents_dirs):
-        try:
-            resolved = agent_file.resolve()
-            resolved.relative_to(agents_path.resolve())
-        except ValueError:
+        if not is_path_within(agents_path, agent_file):
             continue
 
+        resolved = agent_file.resolve()
         content = read_agent_text(resolved)
         frontmatter, body = parse_frontmatter(content)
         run_agent_cli = _resolve_agent_cli(frontmatter, resolved)
@@ -281,7 +305,10 @@ def list_agents(agents_dirs: list[str]) -> list[dict]:
     agents = []
     seen_names: set[str] = set()
 
-    for _, agent_file in _iter_agent_files(agents_dirs):
+    for agents_path, agent_file in _iter_agent_files(agents_dirs):
+        if not is_path_within(agents_path, agent_file):
+            continue
+
         name = agent_file.stem
         description = ""
         cli = None
@@ -471,18 +498,22 @@ class StreamProcessor:
 def build_command(cli: str, prompt: str, agent_meta: dict | None = None) -> tuple[str, list]:
     """Build command and arguments for the specified CLI."""
 
-    is_windows = os.name == "nt"
-
     if cli == "codex":
-        command = "codex.cmd" if is_windows else "codex"
+        command = resolve_cli_command("codex")
         # Keep codex in non-interactive mode; full multi-line prompt is sent via stdin.
         return command, ["exec", "--json", "--skip-git-repo-check", "-"]
 
     if cli == "claude":
-        return "claude", ["--output-format", "stream-json", "--verbose", "-p", prompt]
+        return resolve_cli_command("claude"), [
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "-p",
+            prompt,
+        ]
 
     if cli == "gemini":
-        command = "gemini.cmd" if is_windows else "gemini"
+        command = resolve_cli_command("gemini")
         # Keep gemini in headless mode; full multi-line prompt is sent via stdin.
         args = ["--output-format", "stream-json", "-p", "Use stdin as the full task context."]
         model = (
@@ -495,11 +526,12 @@ def build_command(cli: str, prompt: str, agent_meta: dict | None = None) -> tupl
         return command, args
 
     if cli == "cursor-agent":
+        command = resolve_cli_command("cursor-agent")
         args = ["--output-format", "json", "-p", prompt]
         api_key = os.environ.get("CLI_API_KEY")
         if api_key:
             args.extend(["-a", api_key])
-        return "cursor-agent", args
+        return command, args
 
     raise ValueError(f"Unknown CLI: {cli}")
 
@@ -529,10 +561,6 @@ def execute_agent(
     timeout_sec = timeout / 1000
 
     try:
-        # Windows compatibility: some wrappers may need shell=True, but codex/gemini hang or mis-handle args with it.
-        is_windows = os.name == "nt"
-        use_shell = is_windows and cli not in {"codex", "gemini"}
-
         stdin_pipe = subprocess.PIPE if cli in {"codex", "gemini"} else None
 
         process = subprocess.Popen(
@@ -545,7 +573,7 @@ def execute_agent(
             encoding="utf-8",
             errors="replace",
             bufsize=1,
-            shell=use_shell
+            shell=False,
         )
 
         processor = StreamProcessor()
