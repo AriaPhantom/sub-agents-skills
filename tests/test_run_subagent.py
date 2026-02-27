@@ -23,11 +23,13 @@ from run_subagent import (  # noqa: E402
     is_path_within,
     list_agents,
     load_agent,
+    normalize_approval_mode,
     normalize_gemini_config,
     parse_frontmatter,
     read_agent_text,
     resolve_cli,
     resolve_cli_command,
+    resolve_include_directories,
 )
 
 
@@ -73,6 +75,9 @@ class TestGeminiConfigNormalization:
                 "kind": "local",
                 "model": "flash",
                 "timeout_mins": 3,
+                "approval_mode": "autoEdit",
+                "include_directories": ["./ui", "../shared"],
+                "tools": ["Read"],
             },
             fallback_name="fallback",
         )
@@ -80,6 +85,9 @@ class TestGeminiConfigNormalization:
         assert cfg["kind"] == "local"
         assert cfg["model"] == "flash"
         assert cfg["timeout_mins"] == 3
+        assert cfg["approval_mode"] == "auto_edit"
+        assert cfg["include_directories"] == ["./ui", "../shared"]
+        assert cfg["ignored_fields"] == ["tools"]
 
     def test_invalid_gemini_name_raises(self):
         with pytest.raises(ValueError, match="Invalid Gemini subagent name"):
@@ -88,6 +96,28 @@ class TestGeminiConfigNormalization:
     def test_invalid_timeout_raises(self):
         with pytest.raises(ValueError, match="timeout_mins"):
             normalize_gemini_config({"name": "valid_name", "timeout_mins": 0}, fallback_name="x")
+
+    def test_invalid_approval_mode_raises(self):
+        with pytest.raises(ValueError, match="approval_mode"):
+            normalize_gemini_config({"name": "valid_name", "approval_mode": "unsafe"}, "fallback")
+
+    def test_invalid_include_directories_raises(self):
+        with pytest.raises(ValueError, match="include_directories"):
+            normalize_gemini_config({"name": "valid_name", "include_directories": 123}, "fallback")
+
+
+class TestApprovalModeNormalization:
+    def test_normalizes_alias(self):
+        assert normalize_approval_mode("autoEdit") == "auto_edit"
+        assert normalize_approval_mode("auto-edit") == "auto_edit"
+
+    def test_none_and_blank(self):
+        assert normalize_approval_mode(None) is None
+        assert normalize_approval_mode("   ") is None
+
+    def test_invalid_type_raises(self):
+        with pytest.raises(ValueError, match="approval_mode"):
+            normalize_approval_mode(True)  # type: ignore[arg-type]
 
 
 class TestReadAgentText:
@@ -116,6 +146,34 @@ class TestGetAgentsDirs:
         assert dirs[0] == str(Path(cwd) / ".agents")
         assert dirs[1] == str(Path(cwd) / ".gemini" / "agents")
         assert dirs[2] == str(Path(home) / ".gemini" / "agents")
+
+
+class TestResolveIncludeDirectories:
+    def test_resolves_relative_and_dedupes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cwd = Path(tmpdir)
+            (cwd / "a").mkdir()
+            (cwd / "b").mkdir()
+
+            dirs = resolve_include_directories(["a", "./a", "b"], str(cwd))
+            assert dirs == [str((cwd / "a").resolve()), str((cwd / "b").resolve())]
+
+    def test_rejects_invalid_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cwd = Path(tmpdir)
+            with pytest.raises(ValueError, match="include_directories path is invalid"):
+                resolve_include_directories(["missing-dir"], str(cwd))
+
+    def test_rejects_more_than_five_directories(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cwd = Path(tmpdir)
+            entries = []
+            for idx in range(6):
+                path = cwd / f"d{idx}"
+                path.mkdir()
+                entries.append(str(path))
+            with pytest.raises(ValueError, match="up to 5 directories"):
+                resolve_include_directories(entries, str(cwd))
 
 
 class TestResolveCliCommand:
@@ -176,6 +234,7 @@ Handles backend tasks.
     def test_loads_gemini_agent_by_frontmatter_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             gemini_dir = Path(tmpdir) / ".gemini" / "agents"
+            (Path(tmpdir) / "src").mkdir()
             _write(
                 gemini_dir / "ui-helper.md",
                 """---
@@ -184,6 +243,11 @@ description: Frontend specialist
 kind: local
 model: flash
 timeout_mins: 2
+approval_mode: autoEdit
+include_directories:
+  - ../src
+tools:
+  - Read
 ---
 
 You are frontend specialist.
@@ -196,6 +260,9 @@ You are frontend specialist.
             assert meta["schema"] == "gemini"
             assert meta["model"] == "flash"
             assert meta["timeout_mins"] == 2
+            assert meta["approval_mode"] == "auto_edit"
+            assert meta["include_directories"] == ["../src"]
+            assert meta["ignored_fields"] == ["tools"]
 
     def test_rejects_invalid_agent_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -248,6 +315,37 @@ Instructions.
             frontend = next(a for a in agents if a["name"] == "frontend-ui")
             assert frontend["schema"] == "gemini"
             assert frontend["cli"] == "gemini"
+            assert "approval_mode" not in frontend
+
+    def test_lists_gemini_extended_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gemini = Path(tmpdir) / ".gemini" / "agents"
+            _write(
+                gemini / "frontend.md",
+                """---
+name: frontend-ui
+description: Frontend helper
+kind: local
+model: pro
+timeout_mins: 6
+approval_mode: plan
+include_directories:
+  - ./ui
+temperature: 0.2
+---
+
+Instructions.
+""",
+            )
+            agents = list_agents([str(gemini)])
+            assert len(agents) == 1
+            agent = agents[0]
+            assert agent["name"] == "frontend-ui"
+            assert agent["model"] == "pro"
+            assert agent["timeout_mins"] == 6
+            assert agent["approval_mode"] == "plan"
+            assert agent["include_directories"] == ["./ui"]
+            assert agent["ignored_fields"] == ["temperature"]
 
     def test_handles_invalid_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -333,6 +431,37 @@ class TestBuildCommand:
         with patch.dict("os.environ", {"SUB_AGENT_GEMINI_MODEL": "pro"}):
             _, args = build_command("gemini", "prompt", agent_meta={})
         assert args[-2:] == ["-m", "pro"]
+
+    def test_gemini_command_appends_approval_mode_and_include_directories(self):
+        _, args = build_command(
+            "gemini",
+            "prompt",
+            agent_meta={
+                "model": "flash",
+                "approval_mode": "plan",
+                "include_directories": ["/repo/ui", "/repo/shared"],
+            },
+        )
+        assert "--approval-mode" in args
+        assert "plan" in args
+        include_pairs = [
+            (args[idx], args[idx + 1]) for idx in range(len(args) - 1) if args[idx] == "--include-directories"
+        ]
+        assert include_pairs == [
+            ("--include-directories", "/repo/ui"),
+            ("--include-directories", "/repo/shared"),
+        ]
+
+    def test_gemini_command_approval_mode_env_override(self):
+        with patch.dict("os.environ", {"SUB_AGENT_GEMINI_APPROVAL_MODE": "auto-edit"}):
+            _, args = build_command("gemini", "prompt", agent_meta={})
+        assert "--approval-mode" in args
+        idx = args.index("--approval-mode")
+        assert args[idx + 1] == "auto_edit"
+
+    def test_gemini_command_invalid_approval_mode_raises(self):
+        with pytest.raises(ValueError, match="approval_mode"):
+            build_command("gemini", "prompt", agent_meta={"approval_mode": "nope"})
 
     def test_cursor_includes_api_key_if_set(self):
         with patch.dict("os.environ", {"CLI_API_KEY": "abc123"}):
@@ -483,3 +612,26 @@ class TestExecuteAgent:
         assert result["exit_code"] == 124
         assert result["status"] == "partial"
         assert result["result"] == "partial-out"
+
+    def test_gemini_plan_mode_error_adds_guidance(self):
+        process = MagicMock()
+        process.communicate.return_value = (
+            "",
+            'Approval mode "plan" is only available when experimental.plan is enabled.',
+        )
+        process.returncode = 1
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("subprocess.Popen", return_value=process):
+                result = execute_agent(
+                    cli="gemini",
+                    system_context="System instructions",
+                    prompt="User task",
+                    cwd=tmpdir,
+                    timeout=5000,
+                    agent_meta={"approval_mode": "plan"},
+                )
+
+        assert result["status"] == "error"
+        assert "experimental.plan" in result["error"]
+        assert "switch approval_mode to auto_edit/default" in result["error"]

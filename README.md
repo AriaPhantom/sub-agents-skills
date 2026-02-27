@@ -185,6 +185,10 @@ description: Frontend specialist
 model: flash
 kind: local
 timeout_mins: 10
+approval_mode: plan
+include_directories:
+  - ../web
+  - ../shared-ui
 ---
 
 Agent instructions...
@@ -192,7 +196,11 @@ Agent instructions...
 
 Notes:
 - `model` accepts Gemini CLI aliases like `flash` and `pro`.
+- `approval_mode` supports `default`, `auto_edit`, `yolo`, `plan` (aliases like `autoEdit` are normalized).
+  - Some Gemini CLI installs gate `plan` behind `experimental.plan`; if unavailable, use `auto_edit` or `default`.
+- `include_directories` accepts up to 5 paths. Relative paths are resolved from `--cwd`.
 - `kind: remote` is detected, but this wrapper intentionally returns an explicit error (run remote subagents from native Gemini CLI workflows).
+- Native Gemini subagent fields `tools`, `temperature`, and `max_turns` are surfaced as warnings in wrapper output (the wrapper cannot enforce them in headless mode).
 
 If `run-agent` is not specified, the skill auto-detects the caller environment or defaults to `codex`.
 

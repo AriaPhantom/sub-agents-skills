@@ -101,6 +101,8 @@ def extract_description(body: str) -> str:
 
 _AGENT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 _GEMINI_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_GEMINI_APPROVAL_MODES = {"default", "auto_edit", "yolo", "plan"}
+_GEMINI_NATIVE_ONLY_FIELDS = ("tools", "temperature", "max_turns")
 
 
 def validate_agent_name(agent_name: str) -> str:
@@ -147,6 +149,49 @@ def is_gemini_agents_path(agent_file: Path) -> bool:
     return False
 
 
+def normalize_approval_mode(value: str | None) -> str | None:
+    """Normalize approval mode aliases to Gemini CLI flag-compatible values."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("Invalid Gemini approval_mode. Expected a string.")
+
+    mode = value.strip().lower().replace("-", "_")
+    if not mode:
+        return None
+    if mode == "autoedit":
+        mode = "auto_edit"
+    if mode not in _GEMINI_APPROVAL_MODES:
+        raise ValueError(
+            "Invalid Gemini approval_mode. Expected one of: default, auto_edit, yolo, plan."
+        )
+    return mode
+
+
+def normalize_include_directories(value) -> list[str]:
+    """Normalize include_directories into a flat string list."""
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, list):
+        candidates = value
+    else:
+        raise ValueError("Invalid Gemini include_directories. Expected a string or list of strings.")
+
+    normalized = []
+    for item in candidates:
+        if not isinstance(item, str):
+            raise ValueError("Invalid Gemini include_directories. Expected string entries only.")
+        item = item.strip()
+        if not item:
+            continue
+        normalized.append(item)
+
+    return normalized
+
+
 def normalize_gemini_config(frontmatter: dict, fallback_name: str) -> dict:
     """Normalize and lightly validate Gemini subagent frontmatter fields."""
     name = frontmatter.get("name") or fallback_name
@@ -154,6 +199,9 @@ def normalize_gemini_config(frontmatter: dict, fallback_name: str) -> dict:
     kind = frontmatter.get("kind", "local")
     model = frontmatter.get("model")
     timeout_mins = frontmatter.get("timeout_mins")
+    approval_mode = normalize_approval_mode(frontmatter.get("approval_mode"))
+    include_directories = normalize_include_directories(frontmatter.get("include_directories"))
+    ignored_fields = [field for field in _GEMINI_NATIVE_ONLY_FIELDS if field in frontmatter]
 
     if not isinstance(name, str) or not _GEMINI_NAME_PATTERN.match(name):
         raise ValueError(
@@ -177,6 +225,9 @@ def normalize_gemini_config(frontmatter: dict, fallback_name: str) -> dict:
         "kind": kind,
         "model": model,
         "timeout_mins": timeout_mins,
+        "approval_mode": approval_mode,
+        "include_directories": include_directories,
+        "ignored_fields": ignored_fields,
     }
 
 
@@ -220,6 +271,33 @@ def get_agents_dirs(args_agents_dir: str | None, args_cwd: str | None) -> list[s
         unique_dirs.append(path_str)
 
     return unique_dirs
+
+
+def resolve_include_directories(include_directories: list[str], cwd: str) -> list[str]:
+    """
+    Resolve Gemini include_directories entries to absolute, existing directories.
+    Relative paths are resolved against cwd.
+    """
+    resolved_include_dirs = []
+    seen_include_dirs = set()
+
+    for include_dir in include_directories:
+        include_path = Path(include_dir)
+        if not include_path.is_absolute():
+            include_path = Path(cwd) / include_path
+        include_path = include_path.resolve()
+        include_path_str = str(include_path)
+        if include_path_str in seen_include_dirs:
+            continue
+        if not include_path.exists() or not include_path.is_dir():
+            raise ValueError(f"Gemini include_directories path is invalid: {include_dir}")
+        seen_include_dirs.add(include_path_str)
+        resolved_include_dirs.append(include_path_str)
+
+    if len(resolved_include_dirs) > 5:
+        raise ValueError("Gemini include_directories supports up to 5 directories")
+
+    return resolved_include_dirs
 
 
 def _iter_agent_files(agents_dirs: list[str]):
@@ -268,6 +346,9 @@ def load_agent(agents_dirs: list[str], agent_name: str) -> tuple[str | None, str
             "model": None,
             "timeout_mins": None,
             "kind": "local",
+            "approval_mode": None,
+            "include_directories": [],
+            "ignored_fields": [],
         }
 
         effective_name = resolved.stem
@@ -283,6 +364,9 @@ def load_agent(agents_dirs: list[str], agent_name: str) -> tuple[str | None, str
                     "model": gemini_cfg["model"],
                     "timeout_mins": gemini_cfg["timeout_mins"],
                     "kind": gemini_cfg["kind"],
+                    "approval_mode": gemini_cfg["approval_mode"],
+                    "include_directories": gemini_cfg["include_directories"],
+                    "ignored_fields": gemini_cfg["ignored_fields"],
                 }
             )
         elif isinstance(frontmatter.get("name"), str) and frontmatter["name"].strip():
@@ -313,6 +397,7 @@ def list_agents(agents_dirs: list[str]) -> list[dict]:
         description = ""
         cli = None
         schema = "legacy"
+        gemini_cfg = None
 
         try:
             content = read_agent_text(agent_file)
@@ -342,6 +427,17 @@ def list_agents(agents_dirs: list[str]) -> list[dict]:
         }
         if cli:
             agent_info["cli"] = cli
+        if schema == "gemini" and gemini_cfg:
+            if gemini_cfg.get("model"):
+                agent_info["model"] = gemini_cfg["model"]
+            if gemini_cfg.get("timeout_mins") is not None:
+                agent_info["timeout_mins"] = gemini_cfg["timeout_mins"]
+            if gemini_cfg.get("approval_mode"):
+                agent_info["approval_mode"] = gemini_cfg["approval_mode"]
+            if gemini_cfg.get("include_directories"):
+                agent_info["include_directories"] = gemini_cfg["include_directories"]
+            if gemini_cfg.get("ignored_fields"):
+                agent_info["ignored_fields"] = gemini_cfg["ignored_fields"]
         agents.append(agent_info)
 
     return sorted(agents, key=lambda a: a["name"])
@@ -523,6 +619,16 @@ def build_command(cli: str, prompt: str, agent_meta: dict | None = None) -> tupl
         )
         if isinstance(model, str) and model.strip():
             args.extend(["-m", model.strip()])
+
+        approval_mode = normalize_approval_mode(
+            (agent_meta or {}).get("approval_mode") or os.environ.get("SUB_AGENT_GEMINI_APPROVAL_MODE")
+        )
+        if approval_mode:
+            args.extend(["--approval-mode", approval_mode])
+
+        include_directories = (agent_meta or {}).get("include_directories") or []
+        for include_dir in include_directories:
+            args.extend(["--include-directories", include_dir])
         return command, args
 
     if cli == "cursor-agent":
@@ -626,6 +732,16 @@ def execute_agent(
                 error_msg = f"CLI exited with code {exit_code}"
                 if stderr and stderr.strip():
                     error_msg += f": {stderr.strip()}"
+                if (
+                    cli == "gemini"
+                    and stderr
+                    and "Approval mode \"plan\"" in stderr
+                    and "experimental.plan" in stderr
+                ):
+                    error_msg += (
+                        " (Enable experimental.plan in Gemini config or switch approval_mode "
+                        "to auto_edit/default.)"
+                    )
                 response["error"] = error_msg
             return response
 
@@ -774,6 +890,25 @@ def main():
         )
         sys.exit(1)
 
+    if cli == "gemini":
+        try:
+            include_directories = agent_meta.get("include_directories") or []
+            agent_meta["include_directories"] = resolve_include_directories(
+                include_directories, args.cwd
+            )
+        except ValueError as e:
+            print(
+                json.dumps(
+                    {
+                        "result": "",
+                        "exit_code": 1,
+                        "status": "error",
+                        "error": str(e),
+                    }
+                )
+            )
+            sys.exit(1)
+
     if args.timeout is None:
         timeout = 600000
         timeout_mins = agent_meta.get("timeout_mins")
@@ -799,6 +934,15 @@ def main():
         timeout=timeout,
         agent_meta=agent_meta,
     )
+
+    if cli == "gemini" and agent_meta.get("ignored_fields"):
+        ignored_csv = ", ".join(agent_meta["ignored_fields"])
+        result["warnings"] = [
+            (
+                "Gemini fields present but not enforceable by wrapper in headless mode: "
+                f"{ignored_csv}. Keep them as prompt guidance or use native Gemini subagent routing."
+            )
+        ]
 
     print(json.dumps(result, ensure_ascii=False))
     sys.exit(0 if result["status"] == "success" else 1)

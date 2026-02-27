@@ -163,6 +163,9 @@ description: Frontend implementation specialist
 model: flash
 kind: local
 timeout_mins: 10
+approval_mode: plan
+include_directories:
+  - ../web
 ---
 
 Agent instructions here.
@@ -171,6 +174,10 @@ Agent instructions here.
 Notes:
 - `kind: remote` is currently not supported by this wrapper (use native Gemini CLI for remote subagents).
 - `name` must be lowercase and use letters/numbers/hyphen/underscore.
+- `approval_mode` supports `default`, `auto_edit`, `yolo`, `plan` (`autoEdit` is normalized to `auto_edit`).
+  - Some Gemini CLI installs require enabling `experimental.plan` before `approval_mode: plan` works.
+- `include_directories` accepts up to 5 paths (relative paths resolve from `--cwd`).
+- Native Gemini subagent fields `tools`, `temperature`, and `max_turns` are reported as warnings only (not enforced by this wrapper).
 
 ## CLI Selection Priority
 
