@@ -116,7 +116,7 @@ Parse JSON output and check `status` field:
 | `--agent` | Yes* | Agent definition name from --list |
 | `--prompt` | Yes* | Task description to delegate |
 | `--cwd` | Yes* | Working directory (absolute path) |
-| `--timeout` | No | Timeout ms (default: 600000) |
+| `--timeout` | No | Timeout ms (default: 600000; Gemini `timeout_mins` is used when omitted) |
 | `--cli` | No | Force CLI: `claude`, `cursor-agent`, `codex`, `gemini` |
 
 *Required when not using --list
@@ -126,13 +126,15 @@ Parse JSON output and check `status` field:
 | Priority | Source | Path |
 |----------|--------|------|
 | 1 | Environment variable | `$SUB_AGENTS_DIR` |
-| 2 | Default | `{cwd}/.agents/` |
+| 2 | Default (legacy) | `{cwd}/.agents/` |
+| 3 | Default (Gemini project) | `{cwd}/.gemini/agents/` |
+| 4 | Default (Gemini user) | `~/.gemini/agents/` |
 
 To customize: `export SUB_AGENTS_DIR=/custom/path`
 
 ## Agent Definition Format
 
-Place `.md` files in `.agents/` directory:
+Legacy format (works in `.agents/`):
 
 ```markdown
 ---
@@ -151,6 +153,24 @@ How results should be structured.
 ```
 
 **Critical**: The `run-agent` frontmatter determines which CLI executes the agent.
+
+Gemini-native format (works in `.gemini/agents/` or `~/.gemini/agents/`):
+
+```markdown
+---
+name: frontend-ui
+description: Frontend implementation specialist
+model: gemini-2.5-flash
+kind: local
+timeout_mins: 10
+---
+
+Agent instructions here.
+```
+
+Notes:
+- `kind: remote` is currently not supported by this wrapper (use native Gemini CLI for remote subagents).
+- `name` must be lowercase and use letters/numbers/hyphen/underscore.
 
 ## CLI Selection Priority
 

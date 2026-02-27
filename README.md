@@ -176,6 +176,24 @@ One-sentence purpose.
 |-------|--------|-------------|
 | `run-agent` | `codex`, `claude`, `cursor-agent`, `gemini` | Which CLI executes this agent |
 
+Gemini-native agent files are also supported in `.gemini/agents/` and `~/.gemini/agents/`:
+
+```markdown
+---
+name: frontend-ui
+description: Frontend specialist
+model: flash
+kind: local
+timeout_mins: 10
+---
+
+Agent instructions...
+```
+
+Notes:
+- `model` accepts Gemini CLI aliases like `flash` and `pro`.
+- `kind: remote` is detected, but this wrapper intentionally returns an explicit error (run remote subagents from native Gemini CLI workflows).
+
 If `run-agent` is not specified, the skill auto-detects the caller environment or defaults to `codex`.
 
 ### Keep Agents Self-Contained
@@ -234,7 +252,9 @@ For more advanced patterns (completion checklists, prohibited actions, structure
 |----------|--------|------|
 | 1 | `--agents-dir` argument | Explicit path |
 | 2 | Environment variable | `$SUB_AGENTS_DIR` |
-| 3 | Default | `{cwd}/.agents/` |
+| 3 | Default (legacy) | `{cwd}/.agents/` |
+| 4 | Default (Gemini project) | `{cwd}/.gemini/agents/` |
+| 5 | Default (Gemini user) | `~/.gemini/agents/` |
 
 To customize: `export SUB_AGENTS_DIR=/custom/path`
 
@@ -253,7 +273,7 @@ To customize: `export SUB_AGENTS_DIR=/custom/path`
 | `--agent` | Yes* | Agent definition name from --list |
 | `--prompt` | Yes* | Task description to delegate |
 | `--cwd` | Yes* | Working directory (absolute path) |
-| `--timeout` | No | Timeout ms (default: 600000) |
+| `--timeout` | No | Timeout ms (default: 600000; Gemini `timeout_mins` is used when omitted) |
 | `--cli` | No | Force CLI: `codex`, `claude`, `cursor-agent`, `gemini` |
 
 *Required when not using --list
