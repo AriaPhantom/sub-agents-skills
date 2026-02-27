@@ -160,7 +160,7 @@ Gemini-native format (works in `.gemini/agents/` or `~/.gemini/agents/`):
 ---
 name: frontend-ui
 description: Frontend implementation specialist
-model: gemini-2.5-flash
+model: flash
 kind: local
 timeout_mins: 10
 ---
