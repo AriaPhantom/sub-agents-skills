@@ -108,6 +108,40 @@ Parse JSON output and check `status` field:
 | 127 | CLI not found | Install required CLI (claude, codex, etc.) |
 | 1 | General error | Check `error` field in response |
 
+### Step 4 (Optional): Parallel fan-out / fan-in
+
+`run_subagent.py` is synchronous per invocation, but you can run multiple invocations in background jobs and aggregate outputs later.
+
+```powershell
+$script = "D:\OneDrive\Software\Codex\sub-agents-skills\skills\sub-agents\scripts\run_subagent.py"
+$cwd    = "D:\your-project"
+$outDir = Join-Path $cwd ".agent_out"
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+$jobs = @()
+$jobs += Start-Job -ScriptBlock {
+  param($script,$cwd,$outDir)
+  python $script --agent backend-review --prompt "Review backend risks" --cwd $cwd --timeout 900000 |
+    Out-File (Join-Path $outDir "backend.json") -Encoding utf8
+} -ArgumentList $script,$cwd,$outDir
+$jobs += Start-Job -ScriptBlock {
+  param($script,$cwd,$outDir)
+  python $script --agent frontend-ui --prompt "Review frontend architecture" --cwd $cwd --timeout 900000 |
+    Out-File (Join-Path $outDir "frontend.json") -Encoding utf8
+} -ArgumentList $script,$cwd,$outDir
+$jobs += Start-Job -ScriptBlock {
+  param($script,$cwd,$outDir)
+  python $script --agent test-writer --prompt "Design integration test strategy" --cwd $cwd --timeout 900000 |
+    Out-File (Join-Path $outDir "tests.json") -Encoding utf8
+} -ArgumentList $script,$cwd,$outDir
+
+# Continue other work...
+Wait-Job $jobs
+Receive-Job $jobs | Out-Null
+```
+
+Then read all `*.json`, verify each `status`, and only then do the merged next-step implementation.
+
 ## Parameters
 
 | Parameter | Required | Description |

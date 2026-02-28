@@ -139,6 +139,52 @@ You can have agents that use different LLMs side by side:
 
 **Tip:** Always include *what you want done* in your request—not just which agent to use. Specific prompts get better results.
 
+### Parallel background sub-agents (fan-out / fan-in)
+
+`run_subagent.py` executes one agent per call, but you can run multiple calls in parallel as background jobs, do other work, then collect and merge results.
+
+```powershell
+$repo   = "D:\OneDrive\Software\Codex\sub-agents-skills"
+$script = Join-Path $repo "skills\sub-agents\scripts\run_subagent.py"
+$cwd    = "D:\your-project"
+$outDir = Join-Path $cwd ".agent_out"
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+$j1 = Start-Job -ScriptBlock {
+  param($script,$cwd,$outDir)
+  python $script --agent backend-review --prompt "Review backend risks and priorities" --cwd $cwd --timeout 900000 |
+    Out-File (Join-Path $outDir "backend.json") -Encoding utf8
+} -ArgumentList $script,$cwd,$outDir
+
+$j2 = Start-Job -ScriptBlock {
+  param($script,$cwd,$outDir)
+  python $script --agent frontend-ui --prompt "Review frontend maintainability and component boundaries" --cwd $cwd --timeout 900000 |
+    Out-File (Join-Path $outDir "frontend.json") -Encoding utf8
+} -ArgumentList $script,$cwd,$outDir
+
+$j3 = Start-Job -ScriptBlock {
+  param($script,$cwd,$outDir)
+  python $script --agent test-writer --prompt "Design tests for critical modules" --cwd $cwd --timeout 900000 |
+    Out-File (Join-Path $outDir "tests.json") -Encoding utf8
+} -ArgumentList $script,$cwd,$outDir
+
+# Do other work while jobs run...
+
+Wait-Job $j1,$j2,$j3
+Receive-Job $j1,$j2,$j3 | Out-Null
+
+$backend  = Get-Content (Join-Path $outDir "backend.json")  | ConvertFrom-Json
+$frontend = Get-Content (Join-Path $outDir "frontend.json") | ConvertFrom-Json
+$tests    = Get-Content (Join-Path $outDir "tests.json")    | ConvertFrom-Json
+
+# Aggregate before the next step
+@($backend, $frontend, $tests) | Format-List status, cli, exit_code, result
+```
+
+Recommended pattern:
+- Parallel agents focus on analysis/planning first.
+- Do one consolidated implementation pass afterward to avoid file-write conflicts.
+
 ## Writing Effective Agents
 
 ### The Single Responsibility Principle
