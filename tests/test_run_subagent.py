@@ -451,8 +451,8 @@ class TestBuildCommand:
         ]
         model_idx = args.index("-m")
         assert args[model_idx : model_idx + 2] == ["-m", "flash"]
-        approval_idx = args.index("--approval-mode")
-        assert args[approval_idx + 1] == "yolo"
+        assert "--yolo" in args
+        assert "--approval-mode" not in args
 
     def test_gemini_command_defaults_to_pro_for_large_prompt(self):
         _, args = build_command("gemini", "x" * 600, agent_meta={})

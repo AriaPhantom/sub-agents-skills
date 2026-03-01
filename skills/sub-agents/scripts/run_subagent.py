@@ -663,7 +663,9 @@ def build_command(cli: str, prompt: str, agent_meta: dict | None = None) -> tupl
         )
         if approval_mode is None:
             approval_mode = "yolo"
-        if approval_mode:
+        if approval_mode == "yolo":
+            args.append("--yolo")
+        elif approval_mode:
             args.extend(["--approval-mode", approval_mode])
 
         include_directories = meta.get("include_directories") or []
