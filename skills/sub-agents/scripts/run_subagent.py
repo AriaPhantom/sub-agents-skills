@@ -628,7 +628,13 @@ def build_command(cli: str, prompt: str, agent_meta: dict | None = None) -> tupl
     if cli == "codex":
         command = resolve_cli_command("codex")
         # Keep codex in non-interactive mode; full multi-line prompt is sent via stdin.
-        return command, ["exec", "--json", "--skip-git-repo-check", "-"]
+        return command, [
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--json",
+            "--skip-git-repo-check",
+            "-",
+        ]
 
     if cli == "claude":
         return resolve_cli_command("claude"), [
@@ -655,6 +661,8 @@ def build_command(cli: str, prompt: str, agent_meta: dict | None = None) -> tupl
         approval_mode = normalize_approval_mode(
             meta.get("approval_mode") or os.environ.get("SUB_AGENT_GEMINI_APPROVAL_MODE")
         )
+        if approval_mode is None:
+            approval_mode = "yolo"
         if approval_mode:
             args.extend(["--approval-mode", approval_mode])
 

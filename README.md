@@ -245,10 +245,13 @@ Notes:
   - If `model` is omitted and `SUB_AGENT_GEMINI_MODEL` is not set, this wrapper defaults to `pro` and auto-routes only small prompts to `flash`.
   - Small-task threshold is configurable with `SUB_AGENT_SMALL_TASK_MAX_CHARS` (default: `220`).
 - `approval_mode` supports `default`, `auto_edit`, `yolo`, `plan` (aliases like `autoEdit` are normalized).
+  - If `approval_mode` is omitted and `SUB_AGENT_GEMINI_APPROVAL_MODE` is not set, wrapper default is `yolo`.
   - Some Gemini CLI installs gate `plan` behind `experimental.plan`; if unavailable, use `auto_edit` or `default`.
 - `include_directories` accepts up to 5 paths. Relative paths are resolved from `--cwd`.
 - `kind: remote` is detected, but this wrapper intentionally returns an explicit error (run remote subagents from native Gemini CLI workflows).
 - Native Gemini subagent fields `tools`, `temperature`, and `max_turns` are surfaced as warnings in wrapper output (the wrapper cannot enforce them in headless mode).
+
+Codex invocations include `--dangerously-bypass-approvals-and-sandbox` by default to avoid interactive approval stalls in sub-agent runs.
 
 If `run-agent` is not specified, the skill auto-detects the caller environment or defaults to `codex`.
 

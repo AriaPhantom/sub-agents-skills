@@ -432,7 +432,13 @@ class TestBuildCommand:
     def test_codex_command(self):
         cmd, args = build_command("codex", "prompt")
         assert Path(cmd).name.lower() in {"codex", "codex.cmd", "codex.exe", "codex.bat"}
-        assert args == ["exec", "--json", "--skip-git-repo-check", "-"]
+        assert args == [
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--json",
+            "--skip-git-repo-check",
+            "-",
+        ]
 
     def test_gemini_command_defaults_to_flash(self):
         cmd, args = build_command("gemini", "prompt", agent_meta={})
@@ -443,11 +449,15 @@ class TestBuildCommand:
             "-p",
             "Use stdin as the full task context.",
         ]
-        assert args[-2:] == ["-m", "flash"]
+        model_idx = args.index("-m")
+        assert args[model_idx : model_idx + 2] == ["-m", "flash"]
+        approval_idx = args.index("--approval-mode")
+        assert args[approval_idx + 1] == "yolo"
 
     def test_gemini_command_defaults_to_pro_for_large_prompt(self):
         _, args = build_command("gemini", "x" * 600, agent_meta={})
-        assert args[-2:] == ["-m", "pro"]
+        model_idx = args.index("-m")
+        assert args[model_idx : model_idx + 2] == ["-m", "pro"]
 
     def test_gemini_command_uses_user_prompt_hint_for_auto_model(self):
         _, args = build_command(
@@ -455,17 +465,20 @@ class TestBuildCommand:
             "[System Context]\nVery long context\n\n[User Prompt]\nLong prompt body",
             agent_meta={"_user_prompt": "fix typo"},
         )
-        assert args[-2:] == ["-m", "flash"]
+        model_idx = args.index("-m")
+        assert args[model_idx : model_idx + 2] == ["-m", "flash"]
 
     def test_gemini_command_prefers_agent_meta_model(self):
         cmd, args = build_command("gemini", "prompt", agent_meta={"model": "pro"})
         assert Path(cmd).name.lower() in {"gemini", "gemini.cmd", "gemini.exe", "gemini.bat"}
-        assert args[-2:] == ["-m", "pro"]
+        model_idx = args.index("-m")
+        assert args[model_idx : model_idx + 2] == ["-m", "pro"]
 
     def test_gemini_command_uses_env_override(self):
         with patch.dict("os.environ", {"SUB_AGENT_GEMINI_MODEL": "pro"}):
             _, args = build_command("gemini", "prompt", agent_meta={})
-        assert args[-2:] == ["-m", "pro"]
+        model_idx = args.index("-m")
+        assert args[model_idx : model_idx + 2] == ["-m", "pro"]
 
     def test_gemini_command_appends_approval_mode_and_include_directories(self):
         _, args = build_command(

@@ -210,9 +210,11 @@ Notes:
 - `name` must be lowercase and use letters/numbers/hyphen/underscore.
 - If `model` is omitted and `SUB_AGENT_GEMINI_MODEL` is not set, wrapper policy is: default `pro`, only short prompts auto-route to `flash` (threshold from `SUB_AGENT_SMALL_TASK_MAX_CHARS`, default `220`).
 - `approval_mode` supports `default`, `auto_edit`, `yolo`, `plan` (`autoEdit` is normalized to `auto_edit`).
+  - If `approval_mode` is omitted and `SUB_AGENT_GEMINI_APPROVAL_MODE` is not set, wrapper default is `yolo`.
   - Some Gemini CLI installs require enabling `experimental.plan` before `approval_mode: plan` works.
 - `include_directories` accepts up to 5 paths (relative paths resolve from `--cwd`).
 - Native Gemini subagent fields `tools`, `temperature`, and `max_turns` are reported as warnings only (not enforced by this wrapper).
+- Codex invocations include `--dangerously-bypass-approvals-and-sandbox` by default to avoid interactive approval prompts during sub-agent runs.
 
 ## CLI Selection Priority
 
